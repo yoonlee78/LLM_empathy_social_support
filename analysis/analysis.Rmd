@@ -1,0 +1,550 @@
+---
+title: "analysis"
+author: "desmond"
+date: "2024-03-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(ggplot2)
+library(lme4)
+library(DT)
+
+my_theme <-  theme_bw() + theme(legend.position="top",
+                                strip.background = element_rect(fill="#FFFFFF"), 
+                                strip.text = element_text(size=12), 
+                                axis.text = element_text(size=12),
+                                axis.title.x = element_text(size=14, vjust=-0.2),
+                                axis.title.y = element_text(size=14, vjust=0.8),
+                                legend.text = element_text(size=12),
+                                title = element_text(size=18, vjust=1),
+                                panel.grid = element_blank())
+
+
+my_palette = c("#7DC0A6", "#ED936B", "#919FC7", "#DA8FC0", 
+                        "#B0D667", "#F9DB56", "#DFC59A", "#B3B3B3")
+
+#brewer set 2 is:
+# 7DC0A6, ED936B, 919FC7, DA8FC0, B0D667, F9DB56, DFC59A, B3B3B3
+
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+```
+
+```{r read-in-data}
+s1a_g1 = read.csv('study1a_group1_cleaned.csv') %>% 
+  pivot_longer(cols = starts_with("s", ignore.case=F),
+               names_to = "variable_name_long",
+               values_to = "value") %>%
+  mutate(variable = str_sub(variable_name_long, -3, -1),
+         storyID = str_match(variable_name_long, "s\\s*(.*?)\\s*_")[,2],
+         model = str_match(variable_name_long, "_\\s*(.*?)\\s*_")[,2]
+         ) %>%
+  select(-variable_name_long) %>%
+  pivot_wider(names_from = c(variable), values_from = value) %>%
+  relocate(SubjectNum, ProlificID, GroupID, storyID, model, app, emp)
+  
+s1a_g2 = read.csv('study1a_group2_cleaned.csv') %>%
+  pivot_longer(cols = starts_with("s", ignore.case=F),
+               names_to = "variable_name_long",
+               values_to = "value") %>%
+  mutate(variable = str_sub(variable_name_long, -3, -1),
+         storyID = str_match(variable_name_long, "s\\s*(.*?)\\s*_")[,2],
+         model = str_match(variable_name_long, "_\\s*(.*?)\\s*_")[,2]
+         ) %>%
+  select(-variable_name_long) %>%
+  pivot_wider(names_from = c(variable), values_from = value) %>%
+  relocate(SubjectNum, ProlificID, GroupID, storyID, model, app, emp)
+
+s1a = bind_rows(s1a_g1, s1a_g2) %>% 
+  mutate(model = factor(model, 
+                        levels=c("human", "gptbase", "gpthigh", "gptlow", "llama", "mistral"),
+                        labels=c("Human", "GPT4", "GPT4-high", "GPT4-low", "Llama2", "Mistral")),
+         storyID = factor(storyID, levels=c(1:15))) 
+
+
+
+
+
+
+# for S2:
+# # had to manually rename these: they appeared as duplicated columns. Probably a typo
+# # e.g. s11 --> s12. based on those columns around them.
+# 1 s11_llama_emp.1   
+# 2 s52_llama_app.1   
+# 3 s52_llama_emp.1   
+# 4 s6_gpt4_app.1     
+# 5 s6_gpt4_emp.1     
+# 6 s22_mistral_app.1 
+# 7 s22_mistral_emp.1 
+# 8 s22_gpt4_app.1    
+# 9 s22_gpt4_emp.1  
+# # also corrected some typos: e.g., "mistrak", "msitral"
+
+
+s2 = read.csv('study2_cleaned.csv') %>% 
+  select(-ProlificID...What.is.your.Prolific.ID.,
+         -age, -gender, -native.language,
+         -english, -hispanic, -income,
+         -education, -Block.Randomizer...Display.Order,
+         -attention_check.1, -attention_check.2, -attention_check) %>%
+  pivot_longer(cols = starts_with("s", ignore.case=F),
+               names_to = "variable_name_long",
+               values_to = "value") %>%
+  relocate(SubjectNum, variable_name_long, value) %>%
+  filter(!is.na(value)) %>%
+  mutate(variable = str_sub(variable_name_long, -3, -1),
+         storyID = str_match(variable_name_long, "s\\s*(.*?)\\s*_")[,2],
+         model = str_match(variable_name_long, "_\\s*(.*?)\\s*_")[,2]
+         ) %>%
+  select(-variable_name_long) %>%
+  relocate(SubjectNum, storyID, model, variable, value) %>%
+  pivot_wider(names_from = c(variable), values_from = value) %>% 
+  mutate(model = factor(model, 
+                        levels=c("gpt4", "llama", "mistral"),
+                        labels=c("GPT4", "Llama2", "Mistral")),
+         storyID = factor(storyID, levels=c(1:120))) 
+
+
+```
+
+```{r wide-form-for-demographics}
+s1_wide = bind_rows(read.csv('study1a_group1_cleaned.csv'),
+                    read.csv('study1a_group2_cleaned.csv')) %>%
+  relocate(SubjectNum, ProlificID, GroupID, age, gender, native.language, english, hispanic, income, education)
+
+mean(s1_wide$age, na.rm=T); sd(s1_wide$age, na.rm=T)
+table(s1_wide$gender) # Male 1 Female 2 Non-binary 3 Prefer not to say 4
+
+
+s2_wide = read.csv('study2_cleaned.csv') %>% 
+  select(SubjectNum, age, gender, native.language, english, hispanic, income, education)
+
+mean(s2_wide$age, na.rm=T); sd(s2_wide$age, na.rm=T) # 39.88945, 13.21034
+table(s2_wide$gender) # Male 1 Female 2 Non-binary 3 Prefer not to say 4
+#  1   2   3 
+# 89 106   5 
+
+```
+
+# Plots
+
+```{r s1-graphs-by-individual-stories, eval=F, echo=FALSE}
+s1a_storyID_sum = s1a %>% group_by(storyID, model) %>%
+  summarize(appropriate = mean(app, na.rm=T),
+            appropriateSD = sd(app, na.rm=T),
+            empathic = mean(emp, na.rm=T),
+            empathicSD = sd(app, na.rm=T),
+            num = n()) %>%
+  mutate(appropriateCI = 1.96 * appropriateSD/(sqrt(num)),
+         empathicCI = 1.96 * empathicSD/(sqrt(num)))
+
+
+s1a_storyID_sum %>%
+  ggplot(aes(x=model, y=empathic, fill=model)) + 
+  geom_bar(stat='identity') + facet_wrap(~storyID, ncol=3)
+```
+
+
+```{r s1-lmer-analysis, echo=F}
+
+# #paired t-test is equivalent to lmer model with only those two levels
+# t.test(
+#   (s1a %>% filter(model %in% c("Human")) %>% arrange(storyID, SubjectNum))$emp,
+#   (s1a %>% filter(model %in% c("GPT4")) %>% arrange(storyID, SubjectNum))$emp,
+#   paired=T
+# )
+# 
+# s1a %>% filter(model %in% c("Human", "GPT4")) %>%
+#   lmer(emp ~ model + (1|storyID:SubjectNum) + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+
+s1a %>% 
+  lmer(emp ~ model + (1|storyID:SubjectNum) + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+
+
+# comparing gpt4 and gpt4-high
+s1a %>% mutate(model = fct_relevel(model, "GPT4")) %>% 
+  lmer(emp ~ model + (1|storyID:SubjectNum) + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+
+
+# comparing GPT and LLaMa vs Mistral
+s1a %>% mutate(model = fct_relevel(model, "Mistral")) %>% 
+  lmer(emp ~ model + (1|storyID:SubjectNum) + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+
+
+# t.test(
+#   (s1a %>% filter(model %in% c("GPT4")) %>% arrange(storyID, SubjectNum))$emp,
+#   (s1a %>% filter(model %in% c("LLaMa")) %>% arrange(storyID, SubjectNum))$emp,
+#   paired=T
+# )
+
+
+```
+
+
+```{r s1-overall-graphs-by-model, echo=FALSE}
+s1a_sum = s1a %>% group_by(storyID, model) %>%
+  summarize(app = mean(app, na.rm=T),
+            emp = mean(emp, na.rm=T)) %>% 
+  group_by(model) %>%
+  summarize(appropriate = mean(app, na.rm=T),
+            appropriateSD = sd(app, na.rm=T),
+            empathic = mean(emp, na.rm=T),
+            empathicSD = sd(app, na.rm=T),
+            num = n()) %>%
+  mutate(appropriateCI = 1.96 * appropriateSD/(sqrt(num)),
+         empathicCI = 1.96 * empathicSD/(sqrt(num)))
+
+
+s1a_sum %>% mutate(appropriate.ciLower = appropriate - appropriateCI,
+                   appropriate.ciUpper = appropriate + appropriateCI,
+                   empathic.ciLower = empathic - empathicCI,
+                   empathic.ciUpper = empathic + empathicCI) %>%
+  select(model, appropriate, appropriate.ciLower, appropriate.ciUpper,
+                   empathic, empathic.ciLower, empathic.ciUpper) %>%
+datatable(rownames = FALSE, options = list(
+            dom = 't' # only display the table, and nothing else; https://datatables.net/reference/option/dom
+          )) %>% 
+  formatRound(columns=c('appropriate', 'appropriate.ciLower', 'appropriate.ciUpper', 
+                        'empathic', 'empathic.ciLower', 'empathic.ciUpper'), digits=3)
+
+
+p1 = s1a_sum %>%
+  ggplot(aes(x=model, y=empathic, fill=model)) + 
+  geom_bar(stat='identity') +
+  geom_errorbar(aes(ymin = empathic - empathicCI, ymax = empathic + empathicCI), width=.2) +
+  #scale_fill_brewer(name="Model/Human", palette="Set2") +
+  scale_fill_manual(name="Model/Human", values=my_palette[c(4,1,5,6,2,3)]) +
+  ylab("Is the response empathic?") + 
+  xlab("Study 1: Model/Human") + coord_cartesian(ylim =c(1,5)) +
+  # annotate("segment", x = 1, xend = 2, y = 4.3, yend = 4.3, colour = "black") +
+  # annotate("segment", x = 1, xend = 3, y = 4.5, yend = 4.5, colour = "black") +
+  # annotate("segment", x = 1, xend = 5, y = 4.7, yend = 4.7, colour = "black") +
+  # annotate("segment", x = 1, xend = 6, y = 4.9, yend = 4.9, colour = "black") +
+  # annotate("text", x = 1.2, y = 4.3, label = "***") + 
+  my_theme + theme(legend.position = "none")
+# 6 x 3.5
+
+s1a_sum %>%
+  ggplot(aes(x=model, y=appropriate, fill=model)) + 
+  geom_bar(stat='identity') +
+  geom_errorbar(aes(ymin = appropriate - appropriateCI, ymax = appropriate + appropriateCI), width=.2) +
+  scale_fill_brewer(name="Model/Human", palette="Set2") +
+  ylab("Is the response appropriate?") + 
+  xlab("Model/Human") + coord_cartesian(ylim =c(1,5)) +
+  # annotate("segment", x = 1, xend = 2, y = 4.3, yend = 4.3, colour = "black") +
+  # annotate("segment", x = 1, xend = 3, y = 4.5, yend = 4.5, colour = "black") +
+  # annotate("segment", x = 1, xend = 5, y = 4.7, yend = 4.7, colour = "black") +
+  # annotate("segment", x = 1, xend = 6, y = 4.9, yend = 4.9, colour = "black") +
+  # annotate("text", x = 1.2, y = 4.3, label = "***") + 
+  my_theme + theme(legend.position = "none")
+# 6 x 4
+
+
+```
+
+
+
+
+
+
+```{r s2-lmer-analysis, echo=F}
+s2 %>% 
+  lmerTest::lmer(emp ~ model + (1|storyID:SubjectNum) + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+
+
+# comparing LLaMa vs Mistral
+s2 %>% mutate(model = fct_relevel(model, "Mistral")) %>% 
+  lmerTest::lmer(emp ~ model + (1|storyID:SubjectNum) + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+
+
+
+# compare S1 and S2
+bind_rows(s1a %>% mutate(Study = "1"), 
+          s2 %>% mutate(Study = "2",
+                        storyID = factor(as.numeric(storyID) + 1000),
+                        SubjectNum = SubjectNum + 1000)) %>%
+  filter(model=="GPT4") %>%
+  lmerTest::lmer(emp ~ Study + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+
+bind_rows(s1a %>% mutate(Study = "1"), 
+          s2 %>% mutate(Study = "2",
+                        storyID = factor(as.numeric(storyID) + 1000),
+                        SubjectNum = SubjectNum + 1000)) %>%
+  filter(model=="LLaMa") %>%
+  lmerTest::lmer(emp ~ Study + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+
+bind_rows(s1a %>% mutate(Study = "1"), 
+          s2 %>% mutate(Study = "2",
+                        storyID = factor(as.numeric(storyID) + 1000),
+                        SubjectNum = SubjectNum + 1000)) %>%
+  filter(model=="Mistral") %>%
+  lmerTest::lmer(emp ~ Study + (1|storyID) + (1|SubjectNum), data=.) %>% summary()
+  
+
+```
+
+
+```{r s2-overall-graphs-by-model, echo=FALSE}
+s2_sum = s2 %>% group_by(storyID, model) %>%
+  summarize(app = mean(app, na.rm=T),
+            emp = mean(emp, na.rm=T)) %>% 
+  group_by(model) %>%
+  summarize(appropriate = mean(app, na.rm=T),
+            appropriateSD = sd(app, na.rm=T),
+            empathic = mean(emp, na.rm=T),
+            empathicSD = sd(app, na.rm=T),
+            num = n()) %>%
+  mutate(appropriateCI = 1.96 * appropriateSD/(sqrt(num)),
+         empathicCI = 1.96 * empathicSD/(sqrt(num)))
+
+
+s2_sum %>% mutate(appropriate.ciLower = appropriate - appropriateCI,
+                   appropriate.ciUpper = appropriate + appropriateCI,
+                   empathic.ciLower = empathic - empathicCI,
+                   empathic.ciUpper = empathic + empathicCI) %>%
+  select(model, appropriate, appropriate.ciLower, appropriate.ciUpper,
+                   empathic, empathic.ciLower, empathic.ciUpper) %>%
+datatable(rownames = FALSE, options = list(
+            dom = 't' # only display the table, and nothing else; https://datatables.net/reference/option/dom
+          )) %>% 
+  formatRound(columns=c('appropriate', 'appropriate.ciLower', 'appropriate.ciUpper', 
+                        'empathic', 'empathic.ciLower', 'empathic.ciUpper'), digits=3)
+
+
+p2 = s2_sum %>%
+  ggplot(aes(x=model, y=empathic, fill=model)) + 
+  geom_bar(stat='identity') +
+  geom_errorbar(aes(ymin = empathic - empathicCI, ymax = empathic + empathicCI), width=.2) +
+  #scale_fill_brewer(name="Model/Human", palette="Set2") +
+  scale_fill_manual(name="Model", values=my_palette) +
+  #ylab("Is the response empathic?") + 
+  ylab("") +
+  xlab("Study 2: Model") + coord_cartesian(ylim =c(1,5)) +
+  # annotate("segment", x = 1, xend = 2, y = 4.3, yend = 4.3, colour = "black") +
+  # annotate("segment", x = 1, xend = 3, y = 4.5, yend = 4.5, colour = "black") +
+  # annotate("segment", x = 1, xend = 5, y = 4.7, yend = 4.7, colour = "black") +
+  # annotate("segment", x = 1, xend = 6, y = 4.9, yend = 4.9, colour = "black") +
+  # annotate("text", x = 1.2, y = 4.3, label = "***") + 
+  my_theme + theme(legend.position = "none")
+# 3 x 3.5
+
+# 
+# s2_sum %>%
+#   ggplot(aes(x=model, y=appropriate, fill=model)) + 
+#   geom_bar(stat='identity') +
+#   geom_errorbar(aes(ymin = appropriate - appropriateCI, ymax = appropriate + appropriateCI), width=.2) +
+#   scale_fill_brewer(name="Model/Human", palette="Set2") +
+#   ylab("Is the response appropriate?") + 
+#   xlab("Model/Human") + coord_cartesian(ylim =c(1,5)) +
+#   # annotate("segment", x = 1, xend = 2, y = 4.3, yend = 4.3, colour = "black") +
+#   # annotate("segment", x = 1, xend = 3, y = 4.5, yend = 4.5, colour = "black") +
+#   # annotate("segment", x = 1, xend = 5, y = 4.7, yend = 4.7, colour = "black") +
+#   # annotate("segment", x = 1, xend = 6, y = 4.9, yend = 4.9, colour = "black") +
+#   # annotate("text", x = 1.2, y = 4.3, label = "***") + 
+#   my_theme + theme(legend.position = "none")
+# # 6 x 4
+```
+
+
+```{r s2-liwc}
+s2l = read.csv('LIWC results/all_data/all_study2_LIWC-22 Results.csv') %>% 
+  rename(model = ColumnID) %>%
+  mutate(model = factor(model, 
+                        levels=c("gpt4", "llama", "mistral"),
+                        labels=c("GPT4", "Llama2", "Mistral")))
+
+# mean and SD of word count
+s2l %>% group_by(model) %>% summarize(meanWC = mean(WC), sdWC = sd(WC))
+
+
+
+# 
+#   [1] "post_num"     "domain"       "length"       "seeker_post"  "model"        "Text"        
+#   [7] "Segment"      "WC"           "Analytic"     "Clout"        "Authentic"    "Tone"        
+#  [13] "WPS"          "BigWords"     "Dic"          "Linguistic"   "function."    "pronoun"     
+#  [19] "ppron"                
+#  [25] "ipron"        "det"          "article"      "number"       "prep"         "auxverb"     
+#  [31] "adverb"       "conj"         "negate"       "verb"         "adj"          "quantity"    
+#  [37] "Drives"       "affiliation"  "achieve"      "power"        "Cognition"    "allnone"     
+#  [43] "cogproc"      "insight"      "cause"        "discrep"      "tentat"       "certitude"   
+#  [49] "differ"       "memory"       "Affect"       "tone_pos"     "tone_neg"     "emotion"     
+#  [55]       "emo_anx"      "emo_anger"    "emo_sad"      "swear"       
+#  [61] "Social"       "socbehav"     "prosocial"    "polite"       "conflict"     "moral"       
+#  [67] "comm"         "socrefs"      "family"       "friend"       "female"       "male"        
+#  [73] "Culture"      "politic"      "ethnicity"    "tech"         "Lifestyle"    "leisure"     
+#  [79] "home"         "work"         "money"        "relig"        "Physical"     "health"      
+#  [85] "illness"      "wellness"     "mental"       "substances"   "sexual"       "food"        
+#  [91] "death"        "need"         "want"         "acquire"      "lack"         "fulfill"     
+#  [97] "fatigue"      "reward"       "risk"         "curiosity"    "allure"       "Perception"  
+# [103] "attention"    "motion"       "space"        "visual"       "auditory"     "feeling"     
+# [109] "time"         "focuspast"    "focuspresent" "focusfuture"  "Conversation" "netspeak"    
+# [115] "assent"       "nonflu"
+
+
+# s2l %>% select(post_num, model, Analytic, Clout, Authentic, Tone) %>% 
+#   pivot_longer(cols = c(Analytic, Clout, Authentic, Tone),
+#                names_to = "variable",
+#                values_to = "value") %>%
+#   group_by(model, variable) %>% 
+#   summarize(meanValue = mean(value), sd = sd(value), num=n()) %>%
+#   mutate(ci = sd/sqrt(num)*1.96) %>%
+#   ggplot(aes(x=variable, y=meanValue, fill=model)) + 
+#   geom_bar(stat="identity", position=position_dodge()) + 
+#   geom_errorbar(aes(ymin = meanValue-ci, ymax= meanValue+ci), width=.2, position=position_dodge(.9)) +
+#   scale_fill_manual(name="Model", values=my_palette) +
+#   theme_bw()
+
+
+
+# Punctuation
+s2l %>% 
+  select(post_num, model, QMark, Exclam, Emoji) %>% 
+  pivot_longer(cols = c(-post_num, -model),
+               names_to = "variable",
+               values_to = "value") %>%
+  mutate(variable = factor(variable, 
+                           levels=c("QMark", "Exclam", "Emoji"),
+                           labels=c("Question Marks", "Exclamation Marks", "Emojis"))) %>%
+  group_by(model, variable) %>% 
+  mutate(value = value/100) %>% ## convert 0-100 "percentage" to 0-1 proportion
+  summarize(meanValue = mean(value), sd = sd(value), num=n()) %>%
+  mutate(ci = sd/sqrt(num)*1.96) %>%
+  ggplot(aes(x=variable, y=meanValue, fill=model)) + 
+  geom_bar(stat="identity", position=position_dodge()) + 
+  geom_errorbar(aes(ymin = meanValue-ci, ymax= meanValue+ci), width=.2, position=position_dodge(.9)) +
+  scale_fill_manual(name="Model", values=my_palette) +
+  ylab("Proportion of words") + xlab("Linguistic Category") + 
+  my_theme
+# 6 by 3.5
+# 5.5 by 3
+
+# Pronouns
+s2l %>% 
+  select(post_num, model, i, we, you, shehe, they) %>% 
+  pivot_longer(cols = c(-post_num, -model),
+               names_to = "variable",
+               values_to = "value") %>%
+  mutate(variable = factor(variable, 
+                           levels=c("i", "we", "you", "shehe", "they"),
+                           labels=c("I", "We", "You", "She/He", "They"))) %>%
+  group_by(model, variable) %>% 
+  mutate(value = value/100) %>% ## convert 0-100 "percentage" to 0-1 proportion
+  summarize(meanValue = mean(value), sd = sd(value), num=n()) %>%
+  mutate(ci = sd/sqrt(num)*1.96) %>%
+  ggplot(aes(x=variable, y=meanValue, fill=model)) + 
+  geom_bar(stat="identity", position=position_dodge()) + 
+  geom_errorbar(aes(ymin = meanValue-ci, ymax= meanValue+ci), width=.2, position=position_dodge(.9)) +
+  scale_fill_manual(name="Model", values=my_palette) +
+  ylab("Proportion of words") + xlab("Linguistic Category") + 
+  my_theme
+# 8 by 3.5
+# 5.5 by 3
+
+# Emotion Words
+s2l %>% 
+  select(post_num, model, emo_pos, emo_neg) %>% 
+  pivot_longer(cols = c(-post_num, -model),
+               names_to = "variable",
+               values_to = "value") %>%
+    mutate(variable = factor(variable, 
+                           levels=c("emo_pos", "emo_neg"),
+                           labels=c("Positive Emotion Words", "Negative Emotion Words"))) %>%
+  group_by(model, variable) %>% 
+  mutate(value = value/100) %>% ## convert 0-100 "percentage" to 0-1 proportion
+  summarize(meanValue = mean(value), sd = sd(value), num=n()) %>%
+  mutate(ci = sd/sqrt(num)*1.96) %>%
+  ggplot(aes(x=variable, y=meanValue, fill=model)) + 
+  geom_bar(stat="identity", position=position_dodge()) + 
+  geom_errorbar(aes(ymin = meanValue-ci, ymax= meanValue+ci), width=.2, position=position_dodge(.9)) +
+  scale_fill_manual(name="Model", values=my_palette) +
+  ylab("Proportion of words") + xlab("Linguistic Category") + 
+  my_theme
+# 5 by 3.5
+# 5.5 by 3
+
+
+
+
+#mutate(model = fct_relevel(model, "Mistral")) %>% 
+s2l %>% lmerTest::lmer(i ~ model + (1|post_num), data = .) %>% summary()
+
+s2l %>% mutate(model = fct_relevel(model, "Llama2")) %>% 
+  lmerTest::lmer(you ~ model + (1|post_num), data = .) %>% summary()
+
+s2l %>% lmerTest::lmer(we ~ model + (1|post_num), data = .) %>% summary()
+s2l %>% mutate(model = fct_relevel(model, "Mistral")) %>% 
+  lmerTest::lmer(we ~ model + (1|post_num), data = .) %>% summary()
+
+s2l %>% lmerTest::lmer(shehe ~ model + (1|post_num), data = .) %>% summary()
+s2l %>% mutate(model = fct_relevel(model, "Mistral")) %>% 
+  lmerTest::lmer(shehe ~ model + (1|post_num), data = .) %>% summary()
+
+s2l %>% lmerTest::lmer(they ~ model + (1|post_num), data = .) %>% summary()
+s2l %>% mutate(model = fct_relevel(model, "Mistral")) %>% 
+  lmerTest::lmer(they ~ model + (1|post_num), data = .) %>% summary()
+
+
+#punctuation
+
+s2l %>% lmerTest::lmer(QMark ~ model + (1|post_num), data = .) %>% summary()
+s2l %>% mutate(model = fct_relevel(model, "Llama2")) %>% 
+  lmerTest::lmer(QMark ~ model + (1|post_num), data = .) %>% summary()
+
+s2l %>% mutate(model = fct_relevel(model, "Llama2")) %>% 
+  lmerTest::lmer(Exclam ~ model + (1|post_num), data = .) %>% summary()
+
+s2l %>% mutate(model = fct_relevel(model, "Llama2")) %>% 
+  lmerTest::lmer(Emoji ~ model + (1|post_num), data = .) %>% summary()
+
+#emotion
+
+s2l %>% lmerTest::lmer(emo_pos ~ model + (1|post_num), data = .) %>% summary()
+s2l %>% mutate(model = fct_relevel(model, "Llama2")) %>% 
+  lmerTest::lmer(emo_pos ~ model + (1|post_num), data = .) %>% summary()
+
+
+s2l %>% lmerTest::lmer(emo_neg ~ model + (1|post_num), data = .) %>% summary()
+s2l %>% mutate(model = fct_relevel(model, "Llama2")) %>%
+  lmerTest::lmer(emo_neg ~ model + (1|post_num), data = .) %>% summary()
+
+```
+
+
